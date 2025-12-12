@@ -1,0 +1,662 @@
+
+
+# ✅ **CORRECTED & COMPLETE AWS CONSOLE WALKTHROUGH**
+
+(including IAM roles + Lambda + SNS)
+
+---
+
+# 0️⃣ **Create IAM Roles BEFORE anything that needs permissions**
+
+IAM is required for:
+
+* EC2 Launch Templates (instance profile)
+* ECS task execution role
+* Lambda execution role
+* SNS publish role
+
+You must set this up early.
+
+---
+
+# **A️⃣ CREATE IAM ROLES**
+
+## **A1. Create IAM Role for EC2 (Instance Profile)**
+
+Used by ASG/EC2 to:
+
+* Access S3
+* Access SSM (Session Manager)
+* Write logs
+* Pull from ECR (if ECS EC2 mode)
+
+### Steps
+
+1. Top search bar → **IAM**
+2. Left panel → **Roles**
+3. Click **Create role**
+4. Choose **Trusted entity type = AWS service**
+5. Under services → pick **EC2**
+6. Click **Next**
+
+### Attach permissions:
+
+* Tick:
+
+  * **AmazonSSMManagedInstanceCore** (SSM + logging)
+  * **AmazonS3ReadOnlyAccess** (if your app pulls static assets)
+  * **AmazonEC2ContainerRegistryReadOnly** (if needed)
+
+7. Click **Next**
+8. Name the role: **EC2-InstanceRole**
+9. Click **Create role**
+
+Now you have an IAM role for EC2.
+
+---
+
+## **A2. Create IAM Role for Lambda (Execution Role)**
+
+Used when exam asks you to:
+
+* Trigger Lambda
+* Process something
+* Send SNS alerts
+* Write logs to CloudWatch
+
+### Steps
+
+1. IAM → **Roles** → **Create role**
+2. Trusted entity = **AWS Service**
+3. Choose **Lambda**
+4. Next
+
+### Attach permissions:
+
+* **AWSLambdaBasicExecutionRole** (CloudWatch logs)
+* **AmazonSNSFullAccess** (if Lambda must publish SMS/email alerts)
+
+5. Name: **Lambda-ExecutionRole**
+6. Create role.
+
+---
+
+## **A3. Create IAM Role for ECS Task Execution**
+
+Used only if question involves containers/ECR.
+
+### Steps
+
+1. IAM → Create role
+2. Trusted service: **Elastic Container Service** → **Elastic Container Service Tasks**
+3. Permissions:
+
+   * **AmazonECSTaskExecutionRolePolicy**
+4. Name: **ECS-TaskExecutionRole**
+5. Create.
+
+---
+
+# 🟦 From here onward, networking steps stay unchanged
+
+Now that IAM is fixed, we continue with:
+
+---
+
+# 1️⃣ **Create VPC**
+
+1. AWS Console search → **VPC**
+2. Left side → **Your VPCs**
+3. **Create VPC**
+
+   * Name: `MyExamVPC`
+   * IPv4 CIDR: `10.0.0.0/16`
+4. **Create**
+
+---
+
+# 2️⃣ **Create Subnets**
+
+1. Left panel → **Subnets** → Create subnet
+2. Pick VPC = `MyExamVPC`
+
+Create these:
+
+### Public
+
+* `PublicSubnetA` — AZ1 — `10.0.1.0/24`
+* `PublicSubnetB` — AZ2 — `10.0.2.0/24`
+
+### Private
+
+* `PrivateSubnetA` — AZ1 — `10.0.3.0/24`
+* `PrivateSubnetB` — AZ2 — `10.0.4.0/24`
+
+Click **Create subnet**.
+
+---
+
+# 3️⃣ **Create Internet Gateway (IGW)**
+
+1. Left panel → **Internet Gateways**
+2. Create IGW
+3. Name: `MyIGW`
+4. Click **Actions → Attach to VPC**
+5. Select `MyExamVPC` → Attach
+
+---
+
+# 4️⃣ **Create NAT Gateway**
+
+1. Left panel → **NAT Gateways**
+2. Create NAT Gateway
+3. Subnet = **PublicSubnetA**
+4. Allocate Elastic IP
+5. Name: `MyNAT`
+6. Create
+
+---
+
+# 5️⃣ **Route Tables**
+
+### Public Route Table
+
+1. Route Tables → Create route table
+2. Name: `PublicRT`
+3. VPC: `MyExamVPC`
+4. Select `PublicRT` → Routes → Edit routes
+
+   * Add `0.0.0.0/0` → target: **Internet Gateway (MyIGW)**
+5. Subnet associations → Tick PublicSubnetA + PublicSubnetB → Save
+
+### Private Route Table
+
+1. Create → name: `PrivateRT`
+2. Edit routes:
+
+   * `0.0.0.0/0` → target: **NAT Gateway (MyNAT)**
+3. Associate:
+
+   * PrivateSubnetA + PrivateSubnetB
+
+---
+
+# 6️⃣ **Create Security Groups**
+
+## ALB-SG
+
+1. EC2 → Security Groups → Create SG
+2. Name: `ALB-SG`
+3. VPC: `MyExamVPC`
+4. Inbound:
+
+   * HTTP 80 → Source: `0.0.0.0/0`
+5. Create
+
+## App-SG
+
+1. Create SG
+2. Name: `App-SG`
+3. Inbound:
+
+   * HTTP 80 → Source: **ALB-SG** (use SG picker)
+4. Create
+
+## (Optional) DB-SG
+
+* MySQL/Postgres port → Source: **App-SG**
+
+---
+
+# 7️⃣ OPTIONAL (Only if question includes alerts): SNS + Lambda
+
+## **SNS Topic (for SMS/email alerts)**
+
+### Steps
+
+1. AWS search → **SNS**
+2. Left panel → **Topics**
+3. Create topic:
+
+   * Type: **Standard**
+   * Name: `AlarmTopic`
+4. Create topic
+
+### Add Subscription
+
+1. SNS → `AlarmTopic` → Subscriptions → **Create subscription**
+2. Protocol: **SMS** or **Email**
+3. Endpoint: phone number or email
+4. Confirm subscription (email OTP usually required)
+
+**Note:** Exam sandboxes may block real SMS — use **Email** unless SMS is explicitly allowed.
+
+---
+
+## **Lambda Function**
+
+Used for:
+
+* Alerts
+* Auto-healing tasks
+* Basic backend logic
+
+### Create Lambda
+
+1. AWS search → **Lambda**
+2. Click **Create function**
+3. Author from scratch:
+
+   * Name: `MyLambda`
+   * Runtime: Python or Node.js
+   * Execution role: **Use existing role** → `Lambda-ExecutionRole`
+
+### Simple alert code example (Python):
+
+```
+import boto3
+
+def lambda_handler(event, context):
+    sns = boto3.client('sns')
+    sns.publish(
+        TopicArn='arn:aws:sns:region:acct-id:AlarmTopic',
+        Message='Alert from Lambda'
+    )
+    return 'OK'
+```
+
+Deploy → Test function.
+
+---
+
+# 8️⃣ **Create Application Load Balancer**
+
+1. EC2 → Load Balancers → Create Load Balancer
+2. **Application Load Balancer**
+3. Name: `MyALB`
+4. Scheme: Internet-facing
+5. Listeners: HTTP 80
+6. VPC: `MyExamVPC`
+7. Subnets:
+
+   * PublicSubnetA
+   * PublicSubnetB
+
+### Choose Security Group
+
+* **ALB-SG**
+
+### Create Target Group
+
+1. Click **Create target group**
+2. Target type: **Instance**
+3. Name: `MyTG`
+4. Port: 80
+5. Health check path: `/`
+6. Create
+
+Return to ALB → choose `MyTG` → Create ALB.
+
+---
+
+# 9️⃣ **Create Launch Template**
+
+1. EC2 → Launch Templates → Create launch template
+2. Name: `MyLT`
+3. IAM Instance Profile: **EC2-InstanceRole**
+4. Security Group: **App-SG**
+5. User data:
+
+```
+#!/bin/bash
+yum install -y httpd
+echo "Hello from AutoScaled EC2 instance" >/var/www/html/index.html
+systemctl start httpd
+systemctl enable httpd
+```
+
+Create.
+
+---
+
+# 🔟 **Create Auto Scaling Group (ASG)**
+
+1. EC2 → Auto Scaling Groups → Create ASG
+2. Name: `MyASG`
+3. Choose Launch Template: `MyLT`
+4. VPC: `MyExamVPC`
+5. Subnets:
+
+   * PrivateSubnetA
+   * PrivateSubnetB
+
+### Attach to ALB
+
+* Choose **Attach to existing LB**
+* Select **MyTG** target group
+
+### Health Checks:
+
+* Check **Enable ELB health checks**
+* Grace period: 60 sec
+
+### Group Size:
+
+* Desired: 2
+* Min: 2
+* Max: 4
+
+### Scaling Policy:
+
+* Choose **Target Tracking**
+* Metric: **CPU Utilization**
+* Target: **50%**
+
+Create ASG.
+
+---
+
+# 1️⃣1️⃣ **Test the website**
+
+1. EC2 → Load Balancers → Click **MyALB**
+2. Copy the **DNS name**
+3. Paste into browser → Should show web page from EC2 instances.
+
+---
+
+# 1️⃣2️⃣ **Failure Modes + EXACT Fix Navigation**
+
+### ❌ *ALB Targets → Unhealthy*
+
+Go to:
+EC2 → Target Groups → MyTG → Targets
+Check:
+
+* Port correct
+* App-SG allows ALB-SG
+* User-data installed webserver
+* Health check path responds 200
+
+### ❌ *Instances not launching in ASG*
+
+Go to:
+ASG → Activity → Status reason
+
+Fix:
+
+* IAM role missing → add EC2-InstanceRole
+* Wrong AMI → update template
+* Subnets not available → reselect two AZs
+
+### ❌ *NAT not working (private EC2 cannot install packages)*
+
+Check:
+VPC → Route Tables → PrivateRT → Routes
+`0.0.0.0/0 → NAT Gateway`
+
+Check NAT GW:
+NAT must be in **public subnet**.
+
+### ❌ *Lambda cannot publish SNS*
+
+Check IAM role:
+IAM → Roles → Lambda-ExecutionRole → Permissions
+Must include:
+
+* `AWSLambdaBasicExecutionRole`
+* `AmazonSNSFullAccess`
+
+---
+
+
+
+
+
+
+🎯 PART 1 — MASTER DECISION TABLE (WHAT THE QUESTION REALLY WANTS)
+
+Memorize this table. If you see the keyword, you already know the architecture.
+
+If the question contains these words…	The expected solution is…	Components required
+“Bulletproof”, “Highly Available”, “HA”, “Multi-AZ”, “Zero downtime”, “Scalable”	ALB + Auto Scaling Group + EC2 (private subnets)	VPC, 2 public + 2 private subnets, IGW, NAT, Route Tables, ALB, TG, LT, ASG, SGs
+“Deploy a web application”, “Dynamic webapp”, “Backend”, “EC2 application”	Simple EC2 or ALB + EC2 depending on marks	VPC, Public subnet OR (if 30 marks) ALB + ASG
+“Load balanced”, “Distribute traffic”, “Public endpoint with private servers”	Application Load Balancer	ALB, Target Group, Public subnets, Private app servers
+“Scalable web tier”, “Auto scaling”, “Handle traffic spikes”	Auto Scaling Group	LT, ASG, ALB (optional), health checks
+“Containerized application”, “Docker image”, “ECR”, “Microservice”, “ECS”	ECS Service + ALB + ECR	VPC, SGs, Task Definition, Execution Role, Service, ALB
+“Persistent layer”, “MYSQL/Postgres”, “Database tier”, “Private database”	RDS in private subnet	RDS, DB-SG, subnet group, private networking
+“Secure”, “Harden”, “Backend not public”, “Least privilege”	Private subnets + SG chaining + IAM roles	No public IPs, private app tier, SG references
+“Send notifications”, “Trigger alert”, “Serverless event”, “Background processing”	Lambda + SNS (or CloudWatch alarm)	Lambda function, execution role, SNS topic
+“Host static content via CDN”	CloudFront + S3 (rare in 30 marks)	CloudFront, S3
+“API”, “REST endpoint”, “Trigger Lambda”, “API events”	API Gateway + Lambda	API Gateway, Lambda, execution role
+🎯 PART 2 — EXACT ARCHITECTURE YOU SHOULD BUILD BASED ON QUESTION TYPE
+
+This is a breakdown of the actual builds used in 25–30 mark questions.
+
+1️⃣ HIGH-AVAILABILITY WEB APPLICATION (most common 30-mark)
+Keywords you will see:
+
+“Highly Available Web Application”
+
+“Bulletproof”
+
+“Load Balanced”
+
+“Multi-AZ”
+
+“Scalable backend”
+
+“Use EC2 instances”
+
+You MUST build:
+User → ALB (Public Subnets)
+           ↓
+     ASG (Private Subnets)
+           ↓
+       EC2 instances
+
+Components Required:
+
+VPC
+
+2 Public Subnets
+
+2 Private Subnets
+
+Internet Gateway
+
+NAT Gateway
+
+Public Route Table → IGW
+
+Private Route Table → NAT
+
+Security Groups:
+
+ALB-SG: allow 80/443 from world
+
+App-SG: allow 80 from ALB-SG
+
+Launch Template
+
+Auto Scaling Group
+
+Application Load Balancer
+
+Target Group
+
+Health Check configured
+
+IAM instance role
+
+Examiner scoring:
+
+8 marks → VPC + subnets
+
+5 marks → ALB correct setup
+
+5 marks → ASG correct setup
+
+4 marks → SG chain
+
+3 marks → NAT + routing
+
+5 marks → working deployment
+
+2️⃣ CONTAINER WEB APPLICATION (ECS + ECR + ALB)
+Keywords:
+
+“Docker”
+
+“ECR repository”
+
+“Deploy using containers”
+
+“ECS cluster”
+
+“Make service available publicly”
+
+“Microservices”
+
+Architecture:
+User → ALB → ECS Service → Tasks → (pull image from ECR)
+
+Components required:
+
+VPC (public + private subnets)
+
+ALB (public)
+
+Task Definition
+
+Execution Role: ECS-TaskExecutionRole
+
+ECR repo with pushed image
+
+ECS Cluster
+
+ECS Service
+
+Target Group (IP target type for Fargate)
+
+SGs:
+
+ALB-SG open to world
+
+ECS-SG allows from ALB-SG
+
+Examiner scoring:
+
+6 → networking
+
+6 → ALB
+
+8 → ECS setup
+
+5 → task definition + execution role
+
+5 → working URL
+
+3️⃣ THREE-TIER APPLICATION (ALB → ASG → RDS)
+Keywords:
+
+“Database tier”
+
+“Persistent layer”
+
+“RDS”
+
+“Secure backend”
+
+“Do not expose DB publicly”
+
+Architecture:
+User → ALB → ASG → EC2 → RDS (private subnet)
+
+Components:
+
+Everything from HA architecture
+PLUS:
+
+RDS instance in private subnets
+
+DB-SG allowing only App-SG
+
+Private subnet group
+
+RDS: Public accessibility = No
+
+Examiner scoring:
+
+6 → DB subnet group
+
+5 → DB SG chaining
+
+3 → DB creation
+
+16 → web tier
+
+4️⃣ SERVERLESS EVENT / ALERTING (Lambda + SNS)
+Keywords:
+
+“Send notification”
+
+“Trigger on event”
+
+“Lambda function publishes to SNS”
+
+“CloudWatch alarm triggers Lambda”
+
+Architecture:
+CloudWatch/Lambda trigger → Lambda → SNS Topic → SMS/Email
+
+Required:
+
+IAM Role for Lambda (Lambda-ExecutionRole with SNS publish)
+
+Lambda function
+
+SNS topic
+
+Subscription (email or SMS)
+
+Examiner scoring:
+
+5 → Lambda creation
+
+5 → Execution role
+
+5 → SNS setup
+
+5 → Trigger
+
+5 → Working alert
+
+5️⃣ SIMPLE PUBLIC EC2 WEBAPP (for 20–25 marks)
+Keywords:
+
+“Launch a website quickly”
+
+“Expose EC2 to the internet”
+
+“User connects directly”
+
+“No load balancing required”
+
+Architecture:
+User → EC2 (Public Subnet + Public IP)
+
+Requirements:
+
+VPC
+
+Public subnet
+
+IGW
+
+Route table configured
+
+EC2 instance with public IP
+
+SG allowing 80/443
+
+User-data to install web server
