@@ -1,0 +1,194 @@
+# AWS Cloud Operations Assignment Summary
+
+This assignment covers 6 lab questions spanning multiple AWS modules, demonstrating core cloud operations skills.
+
+---
+
+## Lab 1 — Module 2: Create a Static Website on S3
+
+**Objective:** Host a static website using Amazon S3.
+
+**Steps:** SSH into an EC2 instance, create an S3 bucket, configure it for public static website hosting, upload website files, create a shell script to automate updates, and optimize using `sync` instead of `cp`.
+
+**Key CLI Commands:**
+
+| Command | Purpose |
+|---|---|
+| `sudo chmod 600 labsuser.pem` | Set secure permissions on the PEM key |
+| `ssh -i labsuser.pem ec2-user@<IP>` | SSH into EC2 instance |
+| `aws configure` | Configure AWS CLI credentials and region |
+| `aws s3 ls` | List S3 buckets |
+| `aws s3api create-bucket --bucket <name> --region eu-west-2 --create-bucket-configuration LocationConstraint=eu-west-2` | Create S3 bucket in a specific region |
+| `tar xvzf static-website.tar.gz` | Extract the website archive |
+| `sudo rm -rf static-website.tar.gz` | Remove the archive after extraction |
+| `aws s3api put-bucket-ownership-controls --bucket <name> --ownership-controls "Rules=[{ObjectOwnership=BucketOwnerPreferred}]"` | Set bucket ownership controls |
+| `aws s3api put-public-access-block --bucket <name> --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"` | Disable public access block |
+| `aws s3 website s3://<bucket>/ --index-document index.html` | Configure bucket for static website hosting |
+| `aws s3 cp . s3://<bucket>/ --recursive --acl public-read` | Upload all files to S3 with public read ACL |
+| `aws s3 ls <bucket>` | Verify bucket contents |
+| `aws s3 sync ~/sysops-activity-files/ s3://<bucket>/ --acl public-read` | Sync local files to S3 (more efficient than cp) |
+
+---
+
+## Lab 2 — Module 3: Troubleshoot Create Instance (LAMP Stack)
+
+**Objective:** Debug and fix a broken shell script that creates a LAMP EC2 instance.
+
+**Steps:** SSH into CLI host, configure AWS CLI, review the `create-lamp-instance.sh` script, fix region and AZ errors, open port 80 in the security group, verify with nmap.
+
+**Fixes Applied:**
+- Region changed from `eu-west-1` → `us-east-1` (two places)
+- AZ changed from `eu-west-1a` → `us-east-1a`
+
+**Key CLI Commands:**
+
+| Command | Purpose |
+|---|---|
+| `cat create-lamp-instance.sh` | View shell script contents |
+| `nano create-lamp-instance.sh` | Edit the script to fix region/AZ errors |
+| `./create-lamp-instance.sh` | Execute the shell script |
+| `sudo yum install -y nmap` | Install nmap port scanner |
+| `nmap -Pn <IP>` | Scan for open ports on the EC2 instance |
+| `sudo tail -f /var/log/cloud-init-output.log` | Monitor instance initialization logs |
+
+---
+
+## Lab 3 — Module 7: Troubleshoot VPC
+
+**Objective:** Fix VPC connectivity issues and analyze VPC Flow Logs.
+
+**Steps:** Set up Flow Logs to S3, investigate SSH timeout by checking security groups, route tables, and Network ACLs, then add a missing internet gateway route and remove a blocking ACL rule.
+
+**Root Causes Found:**
+- Missing route to Internet Gateway in route table
+- Network ACL explicitly denying port 22 (SSH)
+
+**Key CLI Commands:**
+
+| Command | Purpose |
+|---|---|
+| `aws s3api create-bucket --bucket <name> --region us-east-1` | Create bucket for flow logs |
+| `aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId,Tags[?Key==Name].Value,CidrBlock]' --filters 'Name=tag:Name,Values=VPC1'` | Get VPC ID for VPC1 |
+| `aws ec2 create-flow-logs --resource-type VPC --resource-ids <vpc-id> --traffic-type ALL --log-destination-type s3 --log-destination arn:aws:s3:::<bucket>` | Enable VPC Flow Logs to S3 |
+| `aws ec2 describe-flow-logs` | Verify flow log creation |
+| `aws ec2 describe-instances --filter "Name=ip-address,Values=<IP>" --query 'Reservations[*].Instances[*].[State,PrivateIpAddress,InstanceId,SecurityGroups,SubnetId,KeyName]'` | Get web server instance details |
+| `sudo ssh -i labsuser.pem ec2-user@<IP> -o ConnectTimeout=10` | Attempt SSH (reveals timeout) |
+| `aws ec2 describe-security-groups` | Check security group rules |
+| `aws ec2 describe-route-tables` | Get route table ID |
+| `aws ec2 describe-internet-gateways` | Get internet gateway ID |
+| `aws ec2 create-route --route-table-id <rtb-id> --destination-cidr-block 0.0.0.0/0 --gateway-id <igw-id>` | Add route to internet gateway |
+| `aws ec2 describe-network-acls --filter "Name=association.subnet-id,Values=<subnet-id>" --query 'NetworkAcls[*].[NetworkAclId,Entries]'` | Check Network ACL rules |
+| `aws ec2 delete-network-acl-entry --network-acl-id <acl-id> --rule-number 40 --ingress` | Remove blocking ACL rule for port 22 |
+| `mkdir flowlogs && cd flowlogs` | Create directory for flow log download |
+| `aws s3 cp s3://<bucket>/ . --recursive` | Download flow logs from S3 |
+| `gunzip *.gz` | Extract compressed log files |
+| `grep -rn REJECT` | Find all rejected traffic in logs |
+| `grep -rn REJECT . \| wc -l` | Count total rejected entries |
+| `grep -rn ' 22 ' . \| grep REJECT` | Filter rejections on port 22 |
+
+---
+
+## Lab 4 — Module 9: Monitoring Infrastructure (CloudWatch)
+
+**Objective:** Install CloudWatch Agent, create metric filters, alarms, EventBridge rules, and AWS Config rules.
+
+**Steps:** Use SSM Run Command to install the CloudWatch agent, store agent config in Parameter Store, configure log collection, create a 404 metric filter and alarm, set up EventBridge for EC2 state changes, and add AWS Config compliance rules.
+
+**Key Actions (Console-based):**
+- SSM Run Command → `AWS-ConfigureAWSPackage` to install CloudWatch Agent
+- SSM Parameter Store → Created `Monitor-Web-Server` parameter with log config JSON
+- SSM Run Command → `AmazonCloudWatch-ManageAgent` to configure agent
+- CloudWatch → Created metric filter `[ip, id, user, timestamp, request, status_code=404, size]`
+- CloudWatch → Created alarm `404Errors` (threshold ≥ 5 in 1 minute)
+- EventBridge → Rule for EC2 state changes (stopped/terminated) → SNS notification
+- AWS Config → Rules: `ec2-volume-inuse-check` and `required-tags`
+
+---
+
+## Lab 5 — Module 9: Working with AWS CloudTrail
+
+**Objective:** Investigate a security breach using CloudTrail logs, Athena queries, and OS-level forensics.
+
+**Security Incident:** A "chaos" user hacked the web server — changed the homepage image, added an SSH inbound rule open to 0.0.0.0/0, created an OS user, and modified sshd_config.
+
+**Key CLI Commands:**
+
+| Command | Purpose |
+|---|---|
+| `mkdir ctraillogs && cd ctraillogs` | Create directory for CloudTrail logs |
+| `aws s3 ls` | List buckets to find the monitoring bucket |
+| `aws s3 cp s3://<monitoring-bucket>/ . --recursive` | Download all CloudTrail logs |
+| `gunzip *.gz` | Decompress log files |
+| `cat <filename.json> \| python -m json.tool` | Pretty-print JSON log for readability |
+| `ip=<WebServerIP>` | Set shell variable for web server IP |
+| `for i in $(ls); do echo $i && cat $i \| python -m json.tool \| grep sourceIPAddress; done` | Iterate logs and filter by source IP |
+| `for i in $(ls); do echo $i && cat $i \| python -m json.tool \| grep eventName; done` | Iterate logs and filter by event name |
+| `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ConsoleLogin` | Look up console login events |
+| `aws ec2 describe-instances --filters "Name=tag:Name,Values='Cafe Web Server'" --query 'Reservations[*].Instances[*].SecurityGroups[*].[GroupId]' --region <region> --output text \| grep $sgId` | Find security group of web server |
+| `aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceType,AttributeValue=AWS::EC2::SecurityGroup --region <region> --output text \| grep $sgId` | Find events targeting the security group |
+| `sudo aureport --auth` | View OS authentication/login report |
+| `who` | Show currently logged-in users |
+| `sudo userdel -r chaos-user` | Delete the malicious OS user |
+| `sudo kill -9 <ProcNum>` | Force-kill the active chaos-user session |
+| `sudo cat /etc/passwd \| grep -v nologin` | List users who can log in |
+| `sudo ls -l /etc/ssh/sshd_config` | Check sshd_config modification timestamp |
+| `sudo vi /etc/ssh/sshd_config` | Edit SSH config to disable password auth |
+| `sudo service sshd restart` | Restart SSH service to apply changes |
+| `cd /var/www/html/mompopcafe/images/ && sudo mv Coffee-and-Pastries.backup Coffee-and-Pastries.png` | Restore original website image |
+| `aws iam delete-login-profile --user-name chaos-user` | Delete hacker's IAM console login |
+| `grep -rn ' 22 ' . \| grep REJECT \| grep <ip-address>` | Find SSH rejection logs from specific IP |
+| `aws ec2 describe-network-interfaces --filters "Name=association.public-ip,Values=<IP>" --query 'NetworkInterfaces[*].[NetworkInterfaceId,Association.PublicIp]'` | Verify ENI matches flow log entries |
+| `date -d @<unix_timestamp>` | Convert Unix timestamp to readable date |
+
+**Athena Queries Used:**
+```sql
+SELECT * FROM cloudtrail_logs_aman_msis_7272 LIMIT 5;
+
+SELECT useridentity.username, eventtime, eventsource, eventname, requestparameters
+FROM cloudtrail_logs_aman_msis_7272 LIMIT 30;
+
+SELECT DISTINCT useridentity.username, eventName, eventSource
+FROM cloudtrail_logs_aman_msis_7272
+WHERE from_iso8601_timestamp(eventtime) > date_add('day', -1, now())
+ORDER BY eventSource;
+```
+
+---
+
+## Lab 6 — Module 8: Working with S3 (IAM + SNS Notifications)
+
+**Objective:** Demonstrate S3 access control using IAM users and configure S3 event notifications via SNS.
+
+**Steps:** Create S3 bucket, upload images, review IAM user permissions (mediacouser), test upload/delete/get/ACL operations as that user, create an SNS topic with email subscription, configure S3 event notifications via JSON policy, trigger and verify email alerts.
+
+**Key CLI Commands:**
+
+| Command | Purpose |
+|---|---|
+| `aws s3 mb s3://<bucket> --region us-east-1` | Create a new S3 bucket |
+| `aws s3 sync ~/initial-images/ s3://<bucket>/images` | Upload images to S3 images prefix |
+| `aws s3 ls s3://<bucket>/images/ --human-readable --summarize` | List bucket contents with sizes |
+| `aws s3api put-object --bucket <bucket> --key images/<file> --body <local-file>` | Upload a single object to S3 |
+| `aws s3api get-object --bucket <bucket> --key images/<file> <local-filename>` | Download an object from S3 |
+| `aws s3api delete-object --bucket <bucket> --key images/<file>` | Delete an object from S3 |
+| `aws s3api put-object-acl --bucket <bucket> --key images/<file> --acl public-read` | Attempt to set public ACL (blocked by policy) |
+| `nano s3EventNotification.json` | Create S3 event notification config file |
+| `aws s3api put-bucket-notification-configuration --bucket <bucket> --notification-configuration file://s3EventNotification.json` | Apply S3 event notification config |
+
+---
+
+## Summary of AWS Services Used
+
+| Service | Purpose |
+|---|---|
+| **S3** | Static website hosting, log storage, image storage, event notifications |
+| **EC2** | Web servers, CLI hosts, LAMP stack |
+| **IAM** | User permissions, access keys, policies |
+| **VPC** | Networking, flow logs, route tables, NACLs, security groups |
+| **CloudWatch** | Metrics, log groups, alarms, metric filters |
+| **Systems Manager** | Run Command, Parameter Store, CloudWatch Agent management |
+| **CloudTrail** | API activity logging, security forensics |
+| **Athena** | SQL querying of CloudTrail logs |
+| **EventBridge** | EC2 state change notifications |
+| **SNS** | Email alerts for alarms and S3 events |
+| **AWS Config** | Resource compliance rules |
